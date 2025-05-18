@@ -56,7 +56,7 @@ func main() {
 	grpcServer := grpc.NewServer(
 	// Здесь можно добавить перехватчики (interceptors) для логирования, трассировки и т.д.
 	)
-	pb.Regi(grpcServer, srv)
+	pb.(grpcServer, srv)
 
 	// Включаем reflection API для gRPC (полезно для отладки)
 	reflection.Register(grpcServer)

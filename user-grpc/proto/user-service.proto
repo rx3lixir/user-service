@@ -24,3 +24,11 @@ message UserRes {
 }
 
 message ListUserRes { repeated UserRes users = 1; }
+
+service UserService {
+  rpc CreateUser(UserReq) returns (UserRes) {}
+  rpc GetUser(UserReq) returns (UserRes) {}
+  rpc ListUsers(UserReq) returns (ListUserRes) {}
+  rpc UpdateUser(UserReq) returns (UserRes) {}
+  rpc DeleteUser(UserReq) returns (UserRes) {}
+}
