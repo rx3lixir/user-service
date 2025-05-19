@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"log/slog"
+	"fmt"
 	"net"
 	"os"
 	"os/signal"
@@ -10,15 +10,28 @@ import (
 
 	"github.com/rx3lixir/user-service/internal/config"
 	"github.com/rx3lixir/user-service/internal/db"
+	"github.com/rx3lixir/user-service/internal/logger"
 	pb "github.com/rx3lixir/user-service/user-grpc/gen/go"
+	"github.com/rx3lixir/user-service/user-grpc/server"
+
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/reflection"
 )
 
 func main() {
-	// Настраиваем логирование
-	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
-	})))
+	// Загрузка конфигурации
+	c, err := config.New()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Ошибка загрузки конфигурации: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Инициализация логгера
+	logger.Init(c.Service.Env)
+	defer logger.Close()
+
+	// Создаем экземпляр логгера для передачи компонентам
+	log := logger.NewLogger()
 
 	// Создаем контекст, который можно отменить при получении сигнала остановки
 	ctx, cancel := context.WithCancel(context.Background())
@@ -29,34 +42,28 @@ func main() {
 	signal.Notify(signalCh, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-signalCh
-		slog.Info("Shutting down gracefully...")
+		log.Info("Shutting down gracefully...")
 		cancel()
 	}()
-
-	c, err := config.New()
-	if err != nil {
-		slog.Error("error creating config file", "error", err)
-		os.Exit(1)
-	}
 
 	// Создаем пул соединений с базой данных
 	pool, err := db.CreatePostgresPool(ctx, c.DB.DSN())
 	if err != nil {
-		slog.Error("Failed to create postgres pool", "error", err)
+		log.Error("Failed to create postgres pool", "error", err)
 		os.Exit(1)
 	}
 	defer pool.Close()
-	slog.Info("Connected to database")
+	log.Info("Connected to database")
 
 	// Создаем хранилище и gRPC сервер
 	storer := db.NewPosgresStore(pool)
-	srv := server.NewServer(storer)
+	srv := server.NewServer(storer, log)
 
 	// Настраиваем gRPC сервер
 	grpcServer := grpc.NewServer(
 	// Здесь можно добавить перехватчики (interceptors) для логирования, трассировки и т.д.
 	)
-	pb.(grpcServer, srv)
+	pb.RegisterUserServiceServer(grpcServer, srv)
 
 	// Включаем reflection API для gRPC (полезно для отладки)
 	reflection.Register(grpcServer)
@@ -64,11 +71,11 @@ func main() {
 	// Запускаем gRPC сервер
 	listener, err := net.Listen("tcp", c.Server.Address)
 	if err != nil {
-		slog.Error("Failed to start listener", "error", err)
+		log.Error("Failed to start listener", "error", err)
 		os.Exit(1)
 	}
 
-	slog.Info("Server is listening", "address", c.Server.Address)
+	log.Info("Server is listening", "address", c.Server.Address)
 
 	// Запускаем сервер в горутине
 	serverError := make(chan error, 1)
@@ -80,8 +87,8 @@ func main() {
 	select {
 	case <-ctx.Done():
 		grpcServer.GracefulStop()
-		slog.Info("Server stopped gracefully")
+		log.Info("Server stopped gracefully")
 	case err := <-serverError:
-		slog.Error("Server error", "error", err)
+		log.Error("Server error", "error", err)
 	}
 }
