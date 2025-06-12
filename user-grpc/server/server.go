@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/rx3lixir/user-service/internal/db"
-	"github.com/rx3lixir/user-service/internal/logger"
+	"github.com/rx3lixir/user-service/pkg/logger"
 	"github.com/rx3lixir/user-service/pkg/password"
 	pb "github.com/rx3lixir/user-service/user-grpc/gen/go"
 

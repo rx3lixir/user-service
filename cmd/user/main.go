@@ -7,10 +7,12 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/rx3lixir/user-service/internal/config"
 	"github.com/rx3lixir/user-service/internal/db"
-	"github.com/rx3lixir/user-service/internal/logger"
+	"github.com/rx3lixir/user-service/pkg/health"
+	"github.com/rx3lixir/user-service/pkg/logger"
 	pb "github.com/rx3lixir/user-service/user-grpc/gen/go"
 	"github.com/rx3lixir/user-service/user-grpc/server"
 
@@ -40,11 +42,15 @@ func main() {
 	// Настраиваем обработку сигналов для грациозного завершения
 	signalCh := make(chan os.Signal, 1)
 	signal.Notify(signalCh, os.Interrupt, syscall.SIGTERM)
-	go func() {
-		<-signalCh
-		log.Info("Shutting down gracefully...")
-		cancel()
-	}()
+
+	// Логируем конфигурацию для отладки
+	log.Info("Configuration loaded",
+		"env", c.Service.Env,
+		"db_host", c.DB.Host,
+		"db_port", c.DB.Port,
+		"db_name", c.DB.DBName,
+		"server_address", c.Server.Address,
+	)
 
 	// Создаем пул соединений с базой данных
 	pool, err := db.CreatePostgresPool(ctx, c.DB.DSN())
@@ -75,20 +81,47 @@ func main() {
 		os.Exit(1)
 	}
 
-	log.Info("Server is listening", "address", c.Server.Address)
+	log.Info("gRPC server is listening", "address", c.Server.Address)
 
-	// Запускаем сервер в горутине
-	serverError := make(chan error, 1)
+	// Создаем HealthCheck сервер
+	healthServer := health.NewServer(pool, log,
+		health.WithServiceName("user-service"),
+		health.WithVersion("1.0.0"),
+		health.WithPort(":8083"),
+		health.WithTimeout(5*time.Second),
+		health.WithRequiredTables("users"),
+	)
+
+	// Запускаем серверы
+	errCh := make(chan error, 2)
+
+	// Health check сервер
 	go func() {
-		serverError <- grpcServer.Serve(listener)
+		errCh <- healthServer.Start()
 	}()
 
-	// Ждем либо завершения контекста (по сигналу), либо ошибки сервера
+	// gRPC сервер
+	go func() {
+		errCh <- grpcServer.Serve(listener)
+	}()
+
+	// Ждем завершения
 	select {
-	case <-ctx.Done():
+	case <-signalCh:
+		log.Info("Shutting down gracefully...")
+
+		// Останавливаем серверы
 		grpcServer.GracefulStop()
-		log.Info("Server stopped gracefully")
-	case err := <-serverError:
+		if err := healthServer.Shutdown(context.Background()); err != nil {
+			log.Error("Health server shutdown error", "error", err)
+		}
+
+	case err := <-errCh:
 		log.Error("Server error", "error", err)
+
+		grpcServer.GracefulStop()
+		if err := healthServer.Shutdown(context.Background()); err != nil {
+			log.Error("Health server shutdown error", "error", err)
+		}
 	}
 }
